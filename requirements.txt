@@ -1,0 +1,6 @@
+PyQt5>=5.15
+pandas>=2.0
+portalocker>=2.8
+watchdog>=4.0
+pywin32>=306
+python-dateutil>=2.8

@@ -1,0 +1,53 @@
+from PyQt5 import QtWidgets
+from app.config.settings import load_admin_settings, load_projects_registry
+from app.utils.paths import ensure_project_skeleton
+from app.data import store
+from app.ui.parts_view import PartsView
+from app.ui.analyses_view import AnalysesView
+from app.ui.admin_view import AdminView
+
+
+class MainWindow(QtWidgets.QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("TF Engineering Data Manager - Sprint 1")
+        self.resize(1200, 800)
+        self.settings = load_admin_settings()
+        self.projects = load_projects_registry()
+
+        self.project_combo = QtWidgets.QComboBox()
+        for code, p in self.projects.items():
+            if p.active:
+                self.project_combo.addItem(code)
+        default_index = max(0, self.project_combo.findText(self.settings.default_project))
+        self.project_combo.setCurrentIndex(default_index)
+        self.project_combo.currentTextChanged.connect(self.on_project_changed)
+
+        toolbar = self.addToolBar("Project")
+        toolbar.addWidget(QtWidgets.QLabel(" Project: "))
+        toolbar.addWidget(self.project_combo)
+
+        self.tabs = QtWidgets.QTabWidget()
+        self.setCentralWidget(self.tabs)
+
+        self.parts_view = PartsView(self.current_project)
+        self.analyses_view = AnalysesView(self.current_project)
+        self.admin_view = AdminView(self)
+
+        self.tabs.addTab(self.parts_view, "Parts & Revisions")
+        self.tabs.addTab(self.analyses_view, "Analyses")
+        self.tabs.addTab(self.admin_view, "Admin")
+
+        ensure_project_skeleton(self.current_project)
+        store.seed_tables(self.current_project)
+
+    @property
+    def current_project(self) -> str:
+        return self.project_combo.currentText() or self.settings.default_project
+
+    def on_project_changed(self, code: str):
+        ensure_project_skeleton(code)
+        store.seed_tables(code)
+        self.parts_view.set_project(code)
+        self.analyses_view.set_project(code)
+        self.statusBar().showMessage(f"Project switched to {code}")
