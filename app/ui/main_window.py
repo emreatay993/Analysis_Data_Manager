@@ -51,3 +51,22 @@ class MainWindow(QtWidgets.QMainWindow):
         self.parts_view.set_project(code)
         self.analyses_view.set_project(code)
         self.statusBar().showMessage(f"Project switched to {code}")
+
+    def reload_projects(self, select_code: str | None = None) -> None:
+        """Reload the projects registry and repopulate the combobox immediately."""
+        current = self.project_combo.currentText()
+        self.projects = load_projects_registry()
+        block_prev = self.project_combo.blockSignals(True)
+        self.project_combo.clear()
+        for code, p in self.projects.items():
+            if p.active:
+                self.project_combo.addItem(code)
+        target = select_code or current or self.settings.default_project
+        idx = self.project_combo.findText(target)
+        if idx >= 0:
+            self.project_combo.setCurrentIndex(idx)
+        elif self.project_combo.count() > 0:
+            self.project_combo.setCurrentIndex(0)
+        self.project_combo.blockSignals(block_prev)
+        # Ensure views and folders are ready for the currently selected project
+        self.on_project_changed(self.current_project)

@@ -3,6 +3,7 @@ from app.data import store
 from app.services import revision_logic
 from app.services.auth import get_current_user
 from app.utils.paths import revision_ppt_path
+import os
 
 
 class PartsView(QtWidgets.QWidget):
@@ -41,36 +42,49 @@ class PartsView(QtWidgets.QWidget):
 
     def refresh(self):
         store.seed_tables(self._project)
-        parts = store.read_all(self._project, "parts.csv")
-        revs = store.read_all(self._project, "revisions.csv")
+        all_parts = store.read_all(self._project, "parts.csv")
+        all_revs = store.read_all(self._project, "revisions.csv")
+
+        # Filter only rows for the active project and with a non-empty part_base
+        parts = [p for p in all_parts if p.get("project") == self._project and (p.get("part_base") or "").strip()]
+        revs = [r for r in all_revs if r.get("project") == self._project and (r.get("part_base") or "").strip()]
 
         latest_rev_by_part = {}
         pending_by_part = {}
-        ppt_by_part = {}
         for r in revs:
-            if r.get("project") != self._project:
+            part = (r.get("part_base") or "").strip()
+            try:
+                rev = int(r.get("rev_index", "0") or 0)
+            except ValueError:
+                rev = 0
+            if not part:
                 continue
-            part = r.get("part_base", "")
-            rev = int(r.get("rev_index", "0") or 0)
             latest_rev_by_part[part] = max(latest_rev_by_part.get(part, 0), rev)
-            if r.get("pending_activation", "false") == "true":
+            if (r.get("pending_activation", "false") or "").lower() == "true":
                 pending_by_part[part] = True
-            if revision_ppt_path(self._project, part, rev):
-                ppt_by_part[part] = True
+
+        # PPT existence: check for latest rev only
+        ppt_by_part = {}
+        for part, rev in latest_rev_by_part.items():
+            if rev > 0:
+                ppt_by_part[part] = os.path.exists(revision_ppt_path(self._project, part, rev))
+            else:
+                ppt_by_part[part] = False
 
         self.table.setRowCount(len(parts))
-        for i, p in enumerate(parts):
-            if p.get("project") != self._project:
-                continue
-            part = p.get("part_base", "")
+        row_idx = 0
+        for p in parts:
+            part = (p.get("part_base") or "").strip()
             owner = p.get("owner_username", "")
             active_rev = p.get("active_rev", "")
             latest = latest_rev_by_part.get(part, 0)
+            latest_str = str(latest) if latest > 0 else ""
             pending = "Yes" if pending_by_part.get(part, False) else "No"
             ppt_exists = "Yes" if ppt_by_part.get(part, False) else "No"
 
-            for col, val in enumerate([part, owner, active_rev, str(latest), pending, ppt_exists]):
-                self.table.setItem(i, col, QtWidgets.QTableWidgetItem(val))
+            for col, val in enumerate([part, owner, active_rev, latest_str, pending, ppt_exists]):
+                self.table.setItem(row_idx, col, QtWidgets.QTableWidgetItem(val))
+            row_idx += 1
 
     def on_ingest(self):
         path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Select STEP file", filter="STEP Files (*.step *.stp)")

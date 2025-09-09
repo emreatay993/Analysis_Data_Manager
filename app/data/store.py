@@ -12,6 +12,7 @@ CSV_HEADERS = {
     "analyses.csv": ["project","analysis_id","part_base","rev_index","requester","analyst","tags","presentation_number","priority","due_date","status","folder_path","created_at","updated_at"],
     "analysis_event_notes.csv": ["project","analysis_id","event_type","author","notes","timestamp"],
     "status_history.csv": ["entity","entity_id","from_status","to_status","by","timestamp","comment"],
+    "load_cases.csv": ["project","analysis_id","load_case_id","name","notes","created_at"],
 }
 
 

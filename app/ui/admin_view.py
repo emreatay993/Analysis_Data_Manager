@@ -96,4 +96,7 @@ class AdminView(QtWidgets.QWidget):
                 f.write(l + "\n")
         ensure_project_skeleton(code)
         store.seed_tables(code)
+        # Immediately refresh project list in main window
+        if hasattr(self.main_window, "reload_projects"):
+            self.main_window.reload_projects(select_code=code)
         QtWidgets.QMessageBox.information(self, "Project saved", f"{code} at {root}")
