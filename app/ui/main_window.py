@@ -5,6 +5,7 @@ from app.data import store
 from app.ui.parts_view import PartsView
 from app.ui.analyses_view import AnalysesView
 from app.ui.admin_view import AdminView
+from app.ui.assemblies_view import AssembliesView
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -32,10 +33,12 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.parts_view = PartsView(self.current_project)
         self.analyses_view = AnalysesView(self.current_project)
+        self.assemblies_view = AssembliesView(self.current_project)
         self.admin_view = AdminView(self)
 
         self.tabs.addTab(self.parts_view, "Parts & Revisions")
         self.tabs.addTab(self.analyses_view, "Analyses")
+        self.tabs.addTab(self.assemblies_view, "Assemblies")
         self.tabs.addTab(self.admin_view, "Admin")
 
         ensure_project_skeleton(self.current_project)
@@ -50,6 +53,7 @@ class MainWindow(QtWidgets.QMainWindow):
         store.seed_tables(code)
         self.parts_view.set_project(code)
         self.analyses_view.set_project(code)
+        self.assemblies_view.set_project(code)
         self.statusBar().showMessage(f"Project switched to {code}")
 
     def reload_projects(self, select_code: str | None = None) -> None:

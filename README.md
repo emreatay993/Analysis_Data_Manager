@@ -42,3 +42,19 @@ Sprint 1 delivers: project switcher, CSV layer with locks, Admin basics, Parts/R
 5. Export to Excel (Export to Excel button).
    - Expected: File written to `Reports/<PROJECT>_summary.xlsx` with sheets: parts, revisions, analyses, status_history.
 6. Project isolation: Switch to another project and ensure lists are independent; return and verify original project’s data remains intact.
+
+---
+
+## Sprint 3 additions
+- Assemblies management: create assemblies, add/remove members (part + revision).
+- Contacts calculation: compute pair pairs and classify (stub now; OCC integration planned).
+- Assemblies tab integrated into the main UI.
+
+## Sprint 3 acceptance test checklist
+1. Create an assembly (Assemblies tab → New Assembly) with an ID.
+   - Expected: Row in `assemblies.csv` appears.
+2. Add two or more members (Add Member) with valid `part_base` and `rev_index`.
+   - Expected: Rows in `assembly_members.csv` with `included=true`.
+3. Compute contacts (Compute Contacts).
+   - Expected: Rows in `contacts.csv` for each pair; visible in the bottom table.
+4. Project isolation: Switch projects and confirm assemblies/members/contacts are independent per project.
