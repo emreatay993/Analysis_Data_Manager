@@ -59,3 +59,4 @@ def notify_status_change(project: str, analysis_row: dict) -> None:
         to=[e for e in to if e],
         cc=[e for e in cc if e],
     )
+

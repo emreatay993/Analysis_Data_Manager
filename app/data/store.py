@@ -36,14 +36,21 @@ def read_all(project_code: str, name: str) -> List[Dict[str, Any]]:
         raise FileNotFoundError(path)
     with open(path, "r", newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
-        return list(reader)
+        rows: List[Dict[str, Any]] = []
+        for row in reader:
+            # Skip completely blank lines
+            if not any((str(v or "").strip() for v in row.values())):
+                continue
+            rows.append(row)
+        return rows
 
 
 def append_row(project_code: str, name: str, row: Dict[str, Any]) -> None:
     path = _csv_path(project_code, name)
     headers = CSV_HEADERS[name]
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with portalocker.Lock(path, "a", timeout=10) as f:
+    with open(path, "a", newline="", encoding="utf-8") as f:
+        portalocker.lock(f, portalocker.LOCK_EX)
         writer = csv.DictWriter(f, fieldnames=headers)
         if f.tell() == 0:
             writer.writeheader()
@@ -55,7 +62,8 @@ def write_rows(project_code: str, name: str, rows: Iterable[Dict[str, Any]]) -> 
     headers = CSV_HEADERS[name]
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".tmp"
-    with portalocker.Lock(tmp, "w", timeout=10) as f:
+    with open(tmp, "w", newline="", encoding="utf-8") as f:
+        portalocker.lock(f, portalocker.LOCK_EX)
         writer = csv.DictWriter(f, fieldnames=headers)
         writer.writeheader()
         for row in rows:
