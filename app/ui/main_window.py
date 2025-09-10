@@ -1,4 +1,4 @@
-from PyQt5 import QtWidgets
+from PyQt5 import QtWidgets, QtCore
 from app.config.settings import load_admin_settings, load_projects_registry
 from app.utils.paths import ensure_project_skeleton
 from app.data import store
@@ -6,6 +6,7 @@ from app.ui.parts_view import PartsView
 from app.ui.analyses_view import AnalysesView
 from app.ui.admin_view import AdminView
 from app.ui.assemblies_view import AssembliesView
+from app.services.watcher import ProjectWatcher
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -44,9 +45,23 @@ class MainWindow(QtWidgets.QMainWindow):
         ensure_project_skeleton(self.current_project)
         store.seed_tables(self.current_project)
 
+        # Auto-refresh timer
+        self.timer = QtCore.QTimer(self)
+        self.timer.timeout.connect(self.refresh_views)
+        self.timer.start(max(1000, int(self.settings.refresh_seconds) * 1000))
+
+        # File watcher
+        self.watcher = ProjectWatcher(self.current_project, on_change=self.refresh_views)
+        self.watcher.start()
+
     @property
     def current_project(self) -> str:
         return self.project_combo.currentText() or self.settings.default_project
+
+    def refresh_views(self):
+        self.parts_view.refresh()
+        self.analyses_view.refresh()
+        self.assemblies_view.refresh()
 
     def on_project_changed(self, code: str):
         ensure_project_skeleton(code)
@@ -54,6 +69,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.parts_view.set_project(code)
         self.analyses_view.set_project(code)
         self.assemblies_view.set_project(code)
+        # Restart watcher for new project
+        try:
+            self.watcher.stop()
+        except Exception:
+            pass
+        self.watcher = ProjectWatcher(self.current_project, on_change=self.refresh_views)
+        self.watcher.start()
         self.statusBar().showMessage(f"Project switched to {code}")
 
     def reload_projects(self, select_code: str | None = None) -> None:

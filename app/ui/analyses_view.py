@@ -20,6 +20,14 @@ class AnalysesView(QtWidgets.QWidget):
 
     def _setup_ui(self):
         layout = QtWidgets.QVBoxLayout(self)
+        filter_layout = QtWidgets.QHBoxLayout()
+        self.filter_part = QtWidgets.QLineEdit(); self.filter_part.setPlaceholderText("Filter by part")
+        self.filter_status = QtWidgets.QLineEdit(); self.filter_status.setPlaceholderText("Filter by status")
+        self.filter_analyst = QtWidgets.QLineEdit(); self.filter_analyst.setPlaceholderText("Filter by analyst")
+        filter_layout.addWidget(self.filter_part)
+        filter_layout.addWidget(self.filter_status)
+        filter_layout.addWidget(self.filter_analyst)
+
         actions_layout = QtWidgets.QHBoxLayout()
         self.btn_create = QtWidgets.QPushButton("Create Analysis (notes required)")
         self.btn_reassign = QtWidgets.QPushButton("Reassign (notes required)")
@@ -37,6 +45,7 @@ class AnalysesView(QtWidgets.QWidget):
         self.table.setHorizontalHeaderLabels(["Analysis ID","Part","Rev","Requester","Analyst","Status","Tags","Presentation #"])
         self.table.horizontalHeader().setStretchLastSection(True)
 
+        layout.addLayout(filter_layout)
         layout.addLayout(actions_layout)
         layout.addWidget(self.table)
 
@@ -45,12 +54,27 @@ class AnalysesView(QtWidgets.QWidget):
         self.btn_status.clicked.connect(self.on_status)
         self.btn_loadcase.clicked.connect(self.on_load_case)
         self.btn_export.clicked.connect(self.on_export)
+        self.filter_part.textChanged.connect(self.refresh)
+        self.filter_status.textChanged.connect(self.refresh)
+        self.filter_analyst.textChanged.connect(self.refresh)
 
     def refresh(self):
         store.seed_tables(self._project)
         rows = [r for r in store.read_all(self._project, "analyses.csv") if r.get("project") == self._project]
-        self.table.setRowCount(len(rows))
-        for i, r in enumerate(rows):
+        f_part = (self.filter_part.text() or "").lower().strip()
+        f_status = (self.filter_status.text() or "").lower().strip()
+        f_analyst = (self.filter_analyst.text() or "").lower().strip()
+        filtered = []
+        for r in rows:
+            if f_part and f_part not in (r.get("part_base","") or "").lower():
+                continue
+            if f_status and f_status not in (r.get("status","") or "").lower():
+                continue
+            if f_analyst and f_analyst not in (r.get("analyst","") or "").lower():
+                continue
+            filtered.append(r)
+        self.table.setRowCount(len(filtered))
+        for i, r in enumerate(filtered):
             vals = [
                 r.get("analysis_id", ""),
                 r.get("part_base", ""),

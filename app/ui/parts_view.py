@@ -20,6 +20,12 @@ class PartsView(QtWidgets.QWidget):
     def _setup_ui(self):
         layout = QtWidgets.QVBoxLayout(self)
 
+        filter_layout = QtWidgets.QHBoxLayout()
+        self.filter_part = QtWidgets.QLineEdit(); self.filter_part.setPlaceholderText("Filter by part")
+        self.filter_owner = QtWidgets.QLineEdit(); self.filter_owner.setPlaceholderText("Filter by owner")
+        filter_layout.addWidget(self.filter_part)
+        filter_layout.addWidget(self.filter_owner)
+
         actions_layout = QtWidgets.QHBoxLayout()
         self.btn_ingest = QtWidgets.QPushButton("Ingest STEP as New Revision")
         self.btn_activate = QtWidgets.QPushButton("Activate Selected Revision (Owner Only)")
@@ -33,19 +39,21 @@ class PartsView(QtWidgets.QWidget):
         self.table.setHorizontalHeaderLabels(["Part", "Owner", "Active Rev", "Latest Rev", "Pending?", "PPT Exists?"])
         self.table.horizontalHeader().setStretchLastSection(True)
 
+        layout.addLayout(filter_layout)
         layout.addLayout(actions_layout)
         layout.addWidget(self.table)
 
         self.btn_ingest.clicked.connect(self.on_ingest)
         self.btn_add_notes.clicked.connect(self.on_add_notes)
         self.btn_activate.clicked.connect(self.on_activate)
+        self.filter_part.textChanged.connect(self.refresh)
+        self.filter_owner.textChanged.connect(self.refresh)
 
     def refresh(self):
         store.seed_tables(self._project)
         all_parts = store.read_all(self._project, "parts.csv")
         all_revs = store.read_all(self._project, "revisions.csv")
 
-        # Filter only rows for the active project and with a non-empty part_base
         parts = [p for p in all_parts if p.get("project") == self._project and (p.get("part_base") or "").strip()]
         revs = [r for r in all_revs if r.get("project") == self._project and (r.get("part_base") or "").strip()]
 
@@ -63,7 +71,6 @@ class PartsView(QtWidgets.QWidget):
             if (r.get("pending_activation", "false") or "").lower() == "true":
                 pending_by_part[part] = True
 
-        # PPT existence: check for latest rev only
         ppt_by_part = {}
         for part, rev in latest_rev_by_part.items():
             if rev > 0:
@@ -71,9 +78,22 @@ class PartsView(QtWidgets.QWidget):
             else:
                 ppt_by_part[part] = False
 
-        self.table.setRowCount(len(parts))
-        row_idx = 0
+        # Apply filters
+        f_part = (self.filter_part.text() or "").lower().strip()
+        f_owner = (self.filter_owner.text() or "").lower().strip()
+        filtered = []
         for p in parts:
+            part = (p.get("part_base") or "").strip()
+            owner = p.get("owner_username", "")
+            if f_part and f_part not in part.lower():
+                continue
+            if f_owner and f_owner not in owner.lower():
+                continue
+            filtered.append(p)
+
+        self.table.setRowCount(len(filtered))
+        row_idx = 0
+        for p in filtered:
             part = (p.get("part_base") or "").strip()
             owner = p.get("owner_username", "")
             active_rev = p.get("active_rev", "")
@@ -97,7 +117,6 @@ class PartsView(QtWidgets.QWidget):
         part_base, rev_index = parsed
         user = get_current_user(self._project)
         revision_logic.ensure_revision_row(self._project, part_base, rev_index, path, user.username)
-        # Ensure part exists
         parts = store.read_all(self._project, "parts.csv")
         if not any(p.get("part_base") == part_base for p in parts):
             from time import strftime

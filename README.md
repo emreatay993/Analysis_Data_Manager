@@ -58,3 +58,28 @@ Sprint 1 delivers: project switcher, CSV layer with locks, Admin basics, Parts/R
 3. Compute contacts (Compute Contacts).
    - Expected: Rows in `contacts.csv` for each pair; visible in the bottom table.
 4. Project isolation: Switch projects and confirm assemblies/members/contacts are independent per project.
+
+---
+
+## Sprint 4 additions
+- Auto-ingest watcher: detects new/modified STEP and PPT files under `CAD/` and refreshes the UI.
+- Auto-refresh: periodic timer updates tables without manual actions.
+- Filters: quick text filters for Parts (part, owner) and Analyses (part, status, analyst).
+- Logging: rotating file log at `%APPDATA%/TFApp/logs/app.log`.
+
+## Sprint 4 acceptance test checklist
+1. Auto-ingest
+   - Drop a new STEP (e.g., `PART_002.step`) into `CAD\Parts\<part>\rev_002\`.
+   - Expected: Within a few seconds, `revisions.csv` gains the row with `pending_activation=true` and the Parts view shows updated latest rev.
+2. PPT detection
+   - Place/modify `Change_Presentation.pptx` under a revision folder.
+   - Expected: Parts view “PPT Exists?” updates after a few seconds.
+3. Auto-refresh
+   - Without clicking refresh, edit a CSV externally (e.g., change an analyst in `analyses.csv`).
+   - Expected: Table reflects change within the refresh interval.
+4. Filters
+   - Type in the Parts and Analyses filter bars.
+   - Expected: Rows filter live by the entered text.
+5. Logging
+   - Open `%APPDATA%/TFApp/logs/app.log`.
+   - Expected: File exists; future warnings/info will appear here.
