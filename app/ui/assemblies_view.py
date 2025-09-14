@@ -12,6 +12,7 @@ class AssembliesView(QtWidgets.QWidget):
         self._project = project
         self._main_window = main_window
         self._dock_widget: QtWidgets.QDockWidget | None = None
+        self._applied_initial_dock_size = False
         self._setup_ui()
         # Create viewer dock in a sensible default position/size
         if self._main_window is not None:
@@ -19,6 +20,10 @@ class AssembliesView(QtWidgets.QWidget):
             # Defer sizing until window is shown to compute correct height
             try:
                 QtCore.QTimer.singleShot(0, self._set_initial_dock_size)
+            except Exception:
+                pass
+            try:
+                self._main_window.installEventFilter(self)
             except Exception:
                 pass
         self.refresh()
@@ -144,14 +149,35 @@ class AssembliesView(QtWidgets.QWidget):
         if self._dock_widget is None or self._main_window is None:
             return
         try:
-            target_height = max(400, int(self._main_window.height() * 0.7))
+            target_height = max(800, int(self._main_window.height() * 0.8))
             self._main_window.resizeDocks([self._dock_widget], [target_height], QtCore.Qt.Vertical)
         except Exception:
             try:
                 # Fallback: direct resize
-                self._dock_widget.resize(self._dock_widget.width(), max(400, int(self._main_window.height() * 0.7)))
+                self._dock_widget.resize(self._dock_widget.width(), max(800, int(self._main_window.height() * 0.8)))
             except Exception:
                 pass
+
+    def eventFilter(self, obj, event):
+        try:
+            if obj is self._main_window and not self._applied_initial_dock_size and event is not None:
+                et = int(getattr(event, 'type', lambda: -1)())
+                # QEvent.Show = 17, QEvent.Resize = 12
+                if et in (12, 17):
+                    # Wait until window is at its final (likely maximized) size
+                    try:
+                        wh = self._main_window.windowHandle()
+                    except Exception:
+                        wh = None
+                    screen = wh.screen() if wh is not None else QtWidgets.QApplication.primaryScreen()
+                    avail_h = screen.availableGeometry().height() if screen is not None else 0
+                    if self._main_window.isVisible() and self._main_window.height() > 0:
+                        if avail_h <= 0 or self._main_window.height() >= int(avail_h * 0.6):
+                            self._set_initial_dock_size()
+                            self._applied_initial_dock_size = True
+        except Exception:
+            pass
+        return super().eventFilter(obj, event)
 
     def refresh(self):
         store.seed_tables(self._project)
