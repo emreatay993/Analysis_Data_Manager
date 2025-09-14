@@ -12,8 +12,15 @@ class AssembliesView(QtWidgets.QWidget):
         self._project = project
         self._main_window = main_window
         self._dock_widget: QtWidgets.QDockWidget | None = None
-        self._bottom_view_layout: QtWidgets.QVBoxLayout | None = None
         self._setup_ui()
+        # Restore previous dock/floating state if any
+        try:
+            self._restore_viewer_dock_state()
+        except Exception:
+            pass
+        # Ensure a dock exists even on first run without settings
+        if self._dock_widget is None and self._main_window is not None:
+            self._create_viewer_dock()
         self.refresh()
 
     def set_project(self, project: str):
@@ -28,13 +35,11 @@ class AssembliesView(QtWidgets.QWidget):
         self.btn_contacts = QtWidgets.QPushButton("Compute Contacts (stub)")
         self.btn_contacts_occ = QtWidgets.QPushButton("Compute Contacts (OCC)")
         self.clearance_spin = QtWidgets.QDoubleSpinBox(); self.clearance_spin.setRange(0.1, 1000.0); self.clearance_spin.setValue(5.0); self.clearance_spin.setSuffix(" mm max clearance")
-        self.btn_dock = QtWidgets.QPushButton("Undock Viewer")
         actions.addWidget(self.btn_new)
         actions.addWidget(self.btn_add_member)
         actions.addWidget(self.btn_contacts)
         actions.addWidget(self.btn_contacts_occ)
         actions.addWidget(self.clearance_spin)
-        actions.addWidget(self.btn_dock)
 
         self.assemblies = QtWidgets.QComboBox()
         self.members = QtWidgets.QTableWidget()
@@ -60,13 +65,9 @@ class AssembliesView(QtWidgets.QWidget):
         members_container = QtWidgets.QWidget(); members_layout = QtWidgets.QVBoxLayout(members_container); members_layout.setContentsMargins(0,0,0,0); members_layout.addWidget(QtWidgets.QLabel("Members:")); members_layout.addWidget(self.members)
         bottom_split = QtWidgets.QSplitter(QtCore.Qt.Vertical)
         bottom_split.setChildrenCollapsible(False)
-        bottom_view_container = QtWidgets.QWidget(); bottom_view_layout = QtWidgets.QVBoxLayout(bottom_view_container); bottom_view_layout.setContentsMargins(0,0,0,0); bottom_view_layout.addWidget(self.viewer)
-        self._bottom_view_layout = bottom_view_layout
         bottom_contacts_container = QtWidgets.QWidget(); bottom_contacts_layout = QtWidgets.QVBoxLayout(bottom_contacts_container); bottom_contacts_layout.setContentsMargins(0,0,0,0); bottom_contacts_layout.addWidget(QtWidgets.QLabel("Contacts:")); bottom_contacts_layout.addWidget(self.contacts)
-        bottom_split.addWidget(bottom_view_container)
         bottom_split.addWidget(bottom_contacts_container)
-        bottom_split.setStretchFactor(0, 3)
-        bottom_split.setStretchFactor(1, 2)
+        bottom_split.setStretchFactor(0, 1)
 
         main_split.addWidget(members_container)
         main_split.addWidget(bottom_split)
@@ -79,46 +80,110 @@ class AssembliesView(QtWidgets.QWidget):
         self.btn_add_member.clicked.connect(self.on_add_member)
         self.btn_contacts.clicked.connect(self.on_contacts)
         self.btn_contacts_occ.clicked.connect(self.on_contacts_occ)
-        self.btn_dock.clicked.connect(self.toggle_dock_viewer)
         self.assemblies.currentTextChanged.connect(self.refresh_members)
         self.contacts.itemSelectionChanged.connect(self.on_contact_selected)
 
-    def toggle_dock_viewer(self):
-        if self._dock_widget is None:
-            self.undock_viewer()
-        else:
-            self.redock_viewer()
-
-    def undock_viewer(self):
+    def _create_viewer_dock(self, area: QtCore.Qt.DockWidgetArea | None = None, floating: bool | None = None, geometry: QtCore.QByteArray | None = None):
         if self._main_window is None or self._dock_widget is not None:
             return
-        if self._bottom_view_layout is not None:
-            self._bottom_view_layout.removeWidget(self.viewer)
         dock = QtWidgets.QDockWidget("3D Viewer", self._main_window)
         dock.setObjectName("Dock3DViewer")
-        dock.setAllowedAreas(QtCore.Qt.LeftDockWidgetArea | QtCore.Qt.RightDockWidgetArea | QtCore.Qt.BottomDockWidgetArea)
+        dock.setAllowedAreas(QtCore.Qt.LeftDockWidgetArea | QtCore.Qt.RightDockWidgetArea | QtCore.Qt.TopDockWidgetArea | QtCore.Qt.BottomDockWidgetArea)
+        dock.setFeatures(QtWidgets.QDockWidget.DockWidgetMovable | QtWidgets.QDockWidget.DockWidgetFloatable)
+        dock.setMinimumSize(400, 300)
         dock.setWidget(self.viewer)
-        self._main_window.addDockWidget(QtCore.Qt.RightDockWidgetArea, dock)
-        dock.visibilityChanged.connect(self._on_dock_visibility_changed)
+        self._main_window.addDockWidget(area or QtCore.Qt.RightDockWidgetArea, dock)
+        # Connect signals to keep settings in sync and manage window flags
+        dock.topLevelChanged.connect(self._on_dock_top_level_changed)
+        try:
+            dock.dockLocationChanged.connect(lambda _area: self._save_viewer_dock_settings())
+        except Exception:
+            pass
         self._dock_widget = dock
-        self.btn_dock.setText("Redock Viewer")
+        # Apply persisted floating/geometry if requested
+        try:
+            if floating is True:
+                dock.setFloating(True)
+                if isinstance(geometry, (bytes, bytearray, QtCore.QByteArray)) and len(geometry) > 0:
+                    try:
+                        dock.restoreGeometry(geometry)
+                    except Exception:
+                        pass
+                else:
+                    dock.resize(900, 700)
+                self._apply_floating_window_flags()
+        finally:
+            # Persist current state
+            self._save_viewer_dock_settings()
 
-    def redock_viewer(self):
-        if self._dock_widget is not None:
+    def _on_dock_top_level_changed(self, floating: bool):
+        # Ensure floating dock can be maximized and has sensible size
+        if self._dock_widget is None:
+            return
+        if floating:
+            self._apply_floating_window_flags()
+            if self._dock_widget.width() < 400 or self._dock_widget.height() < 300:
+                try:
+                    self._dock_widget.resize(max(900, self._dock_widget.width()), max(700, self._dock_widget.height()))
+                except Exception:
+                    pass
+        # Persist new state
+        self._save_viewer_dock_settings()
+
+    def _apply_floating_window_flags(self):
+        try:
+            if self._dock_widget is None:
+                return
+            if not self._dock_widget.isFloating():
+                return
+            # Enable standard window behavior including maximize when floating
+            self._dock_widget.setWindowFlag(QtCore.Qt.Window, True)
+            self._dock_widget.setWindowFlag(QtCore.Qt.WindowMinimizeButtonHint, True)
+            self._dock_widget.setWindowFlag(QtCore.Qt.WindowMaximizeButtonHint, True)
+            self._dock_widget.setWindowFlag(QtCore.Qt.WindowCloseButtonHint, True)
+            self._dock_widget.show()
+        except Exception:
+            pass
+
+    def _settings(self) -> QtCore.QSettings:
+        return QtCore.QSettings("TFEngineering", "AnalysisDataManager")
+
+    def _save_viewer_dock_settings(self):
+        try:
+            s = self._settings()
+            if self._dock_widget is None:
+                return
+            s.setValue("viewerDock/floating", self._dock_widget.isFloating())
             try:
-                self._dock_widget.visibilityChanged.disconnect(self._on_dock_visibility_changed)
+                area = self._main_window.dockWidgetArea(self._dock_widget) if self._main_window is not None else int(QtCore.Qt.RightDockWidgetArea)
             except Exception:
-                pass
-            self._dock_widget.setWidget(None)
-            self._dock_widget.deleteLater()
-            self._dock_widget = None
-        if self._bottom_view_layout is not None:
-            self._bottom_view_layout.addWidget(self.viewer)
-        self.btn_dock.setText("Undock Viewer")
+                area = int(QtCore.Qt.RightDockWidgetArea)
+            s.setValue("viewerDock/area", int(area))
+            # Save geometry only when floating
+            if self._dock_widget.isFloating():
+                try:
+                    s.setValue("viewerDock/geometry", self._dock_widget.saveGeometry())
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
-    def _on_dock_visibility_changed(self, visible: bool):
-        if not visible:
-            self.redock_viewer()
+    def _restore_viewer_dock_state(self):
+        try:
+            s = self._settings()
+            # Read target area, floating state, and geometry
+            raw_area = s.value("viewerDock/area", int(QtCore.Qt.RightDockWidgetArea))
+            try:
+                area = QtCore.Qt.DockWidgetArea(int(raw_area))
+            except Exception:
+                area = QtCore.Qt.RightDockWidgetArea
+            raw_floating = s.value("viewerDock/floating", False)
+            floating = bool(raw_floating in (True, "true", "1", 1))
+            geometry = s.value("viewerDock/geometry", None)
+            # Create dock in the saved area/state
+            self._create_viewer_dock(area=area, floating=floating, geometry=geometry)
+        except Exception:
+            pass
 
     def refresh(self):
         store.seed_tables(self._project)

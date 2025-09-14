@@ -7,6 +7,7 @@ from app.ui.analyses_view import AnalysesView
 from app.ui.admin_view import AdminView
 from app.ui.assemblies_view import AssembliesView
 from app.services.watcher import ProjectWatcher
+from app.ui.styles import app_stylesheet
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -31,6 +32,11 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.tabs = QtWidgets.QTabWidget()
         self.setCentralWidget(self.tabs)
+        # Apply global app stylesheet for buttons and tabs
+        try:
+            self.setStyleSheet(app_stylesheet)
+        except Exception:
+            pass
 
         self.parts_view = PartsView(self.current_project)
         self.analyses_view = AnalysesView(self.current_project)

@@ -93,19 +93,6 @@ Sprint 1 delivers: project switcher, CSV layer with locks, Admin basics, Parts/R
   python -m pip install cadquery-ocp
   python -c "from OCP.STEPControl import STEPControl_Reader; print('OCP OK')"
   ```
-- Alternative: `OCP` (wraps platform wheel)
-  ```powershell
-  python -m pip install OCP
-  python -c "from OCP.BRepExtrema import BRepExtrema_DistShapeShape; print('OCP Dist OK')"
-  ```
-- If using conda and prefer `pythonocc-core`:
-  ```powershell
-  conda create -n occ310 python=3.10 -y
-  conda activate occ310
-  conda install -c conda-forge pythonocc-core=7.7.* -y
-  python -c "from OCC.Core.STEPControl import STEPControl_Reader; print('pythonocc OK')"
-  ```
-- Requirements: 64‑bit Python, Microsoft Visual C++ 2015–2022 (x64) redistributable.
 
 ---
 
