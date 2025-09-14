@@ -10,6 +10,8 @@ try:
     from OCC.Display.qtDisplay import qtViewer3d  # type: ignore
     from OCC.Core.AIS import AIS_Shape  # type: ignore
     from OCC.Core.Quantity import Quantity_Color, Quantity_TOC_RGB  # type: ignore
+    from OCC.Core.Aspect import Aspect_TOTP_LEFT_LOWER
+    from OCC.Core.V3d import V3d_ZBUFFER
     OCC_QT_OK = True
 except Exception:
     OCC_QT_OK = False
@@ -42,6 +44,7 @@ class AssemblyViewer(QtWidgets.QWidget):
         self._highlight_rgb = (0.1, 0.8, 0.2)
         self._mode = 'none'
         self._did_initial_fit = False
+        self._is_perspective = True
 
         # Controls hint removed
 
@@ -61,8 +64,16 @@ class AssemblyViewer(QtWidgets.QWidget):
                 pass
             # Orientation widget: show only a view cube (larger) and disable triedron
             try:
-                self._add_view_cube_only()
-            except Exception:
+                white = Quantity_Color(1.0, 1.0, 1.0, Quantity_TOC_RGB)
+                self._viewer._display.View.TriedronDisplay(
+                    Aspect_TOTP_LEFT_LOWER,
+                    white, # <-- Pass the object
+                    0.2,
+                    V3d_ZBUFFER
+                )
+                #self._add_view_cube_only()
+            except Exception as e:
+                print(e)
                 pass
             return
 
@@ -242,6 +253,90 @@ class AssemblyViewer(QtWidgets.QWidget):
         h = self._axes_overlay.height()
         self._axes_overlay.move(max(0, self.width() - w - margin), max(0, self.height() - h - margin))
 
+    # ====== Keyboard shortcuts ======
+    def keyPressEvent(self, event):
+        try:
+            k = int(event.key())
+            disp = getattr(getattr(self, '_viewer', None), '_display', None)
+            if self._mode == 'occt' and disp is not None:
+                if k == QtCore.Qt.Key_F:
+                    try:
+                        disp.FitAll()
+                    finally:
+                        return
+                if k == QtCore.Qt.Key_R:
+                    try:
+                        disp.ResetView()
+                    finally:
+                        return
+                if k == QtCore.Qt.Key_W:
+                    try:
+                        disp.SetOrthographicProjection()
+                        self._is_perspective = False
+                    finally:
+                        return
+                if k == QtCore.Qt.Key_P:
+                    try:
+                        disp.SetPerspectiveProjection()
+                        self._is_perspective = True
+                    finally:
+                        return
+                # Numpad-style view controls
+                if k in (QtCore.Qt.Key_5,):
+                    try:
+                        if self._is_perspective:
+                            disp.SetOrthographicProjection(); self._is_perspective = False
+                        else:
+                            disp.SetPerspectiveProjection(); self._is_perspective = True
+                    finally:
+                        return
+                view_map = {
+                    QtCore.Qt.Key_1: 'View_Front',
+                    QtCore.Qt.Key_3: 'View_Right',
+                    QtCore.Qt.Key_7: 'View_Top',
+                    QtCore.Qt.Key_9: 'View_Iso',
+                    QtCore.Qt.Key_2: 'View_Bottom',
+                    QtCore.Qt.Key_4: 'View_Left',
+                    QtCore.Qt.Key_8: 'View_Top',
+                    QtCore.Qt.Key_6: 'View_Right',
+                    QtCore.Qt.Key_0: 'View_Back',
+                }
+                if k in view_map:
+                    fn = getattr(disp, view_map[k], None)
+                    if callable(fn):
+                        try:
+                            fn()
+                        finally:
+                            return
+                    # Fallback to direct projection if wrappers are missing
+                    try:
+                        from OCC.Core.V3d import V3d_TypeOfOrientation, V3d_Xpos, V3d_Xneg, V3d_Ypos, V3d_Yneg, V3d_Zpos, V3d_Zneg  # type: ignore
+                        v = getattr(disp, 'View', None)
+                        if v is not None:
+                            if k == QtCore.Qt.Key_1:
+                                v.SetProj(V3d_Yneg)
+                            elif k == QtCore.Qt.Key_3:
+                                v.SetProj(V3d_Xpos)
+                            elif k == QtCore.Qt.Key_7 or k == QtCore.Qt.Key_8:
+                                v.SetProj(V3d_Zpos)
+                            elif k == QtCore.Qt.Key_4:
+                                v.SetProj(V3d_Xneg)
+                            elif k == QtCore.Qt.Key_6:
+                                v.SetProj(V3d_Xpos)
+                            elif k == QtCore.Qt.Key_0:
+                                v.SetProj(V3d_Ypos)
+                            elif k == QtCore.Qt.Key_9:
+                                v.SetProj(1.0, 1.0, 1.0)  # generic isometric
+                            return
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        try:
+            super().keyPressEvent(event)
+        except Exception:
+            pass
+
     # ====== Color helpers ======
     def _hex_to_rgbf(self, hex_str: str):
         hs = hex_str.lstrip('#')
@@ -263,102 +358,44 @@ class AssemblyViewer(QtWidgets.QWidget):
 
     # ====== Orientation (OCC): View cube only ======
     def _add_view_cube_only(self):
+        """
+        A robust method to add an interactive AIS_ViewCube.
+        This version removes the Z-Layer call for maximum compatibility.
+        """
         try:
-            disp = self._viewer._display
-            # Ensure no triedron is displayed
+            from OCC.Core.AIS import AIS_ViewCube
+            from OCC.Core.Graphic3d import Graphic3d_TransformPers, Graphic3d_TMF_TriedronPers
+            from OCC.Core.Quantity import Quantity_Color, Quantity_TOC_RGB
+
+            # Erase the simple triedron if it exists
+            self._viewer._display.View.TriedronErase()
+
+            # Create and configure the view cube
+            self._view_cube = AIS_ViewCube()
+            self._view_cube.SetSize(100)
+
+            # Set a light color for the cube to stand out
+            light_gray = Quantity_Color(0.8, 0.8, 0.8, Quantity_TOC_RGB)
+            self._view_cube.SetBoxColor(light_gray)
+
+            # Create the persistence object to lock it in a corner
+            tp = Graphic3d_TransformPers(Graphic3d_TMF_TriedronPers)
+            self._view_cube.SetTransformPersistence(tp)
+
+            # Display the cube
+            self._ctx.Display(self._view_cube, True)
+
+            # **CRITICAL FIX**
+            # Force the camera to zoom to fit all objects, including the new cube.
+            self._viewer._display.FitAll()
+
+            print("[Viewer] AIS_ViewCube displayed successfully.")
+
+        except Exception as e:
+            print(f"[Viewer] Failed to add AIS_ViewCube: {e}")
+            # Fallback to the simple triedron if the cube fails
             try:
-                print("[Viewer] Attempting to erase triedron (if any) and add AIS_ViewCube only...")
-                if hasattr(disp, 'View'):
-                    v = getattr(disp, 'View')
-                    try:
-                        v.TriedronErase()
-                        print("[Viewer] TriedronErase called on View.")
-                    except Exception:
-                        try:
-                            print("[Viewer] TriedronErase not available on View.")
-                        except Exception:
-                            pass
-            except Exception:
-                pass
-            # Add a larger AIS_ViewCube
-            from OCC.Core.AIS import AIS_ViewCube  # type: ignore
-            vc = AIS_ViewCube()
-            try:
-                vc.SetSize(120.0)
-                print("[Viewer] AIS_ViewCube size set to 120.0")
-            except Exception:
-                try:
-                    print("[Viewer] AIS_ViewCube.SetSize not available")
-                except Exception:
-                    pass
-            try:
-                vc.SetBoxFacetExtension(1.0)
-                print("[Viewer] AIS_ViewCube facet extension set")
-            except Exception:
-                try:
-                    print("[Viewer] AIS_ViewCube.SetBoxFacetExtension not available")
-                except Exception:
-                    pass
-            # Try to anchor the cube to a screen corner (transform persistence)
-            anchored = False
-            try:
-                from OCC.Core.Graphic3d import Graphic3d_TMF_TriedronPers, Graphic3d_TransformPers  # type: ignore
-                from OCC.Core.gp import gp_Pnt  # type: ignore
-                tp = Graphic3d_TransformPers(Graphic3d_TMF_TriedronPers, gp_Pnt(1.0, -1.0, 0.0))
-                vc.SetTransformPersistence(tp)
-                print("[Viewer] ViewCube transform persistence set (TriedronPers, +corner point)")
-                anchored = True
-            except Exception:
-                try:
-                    from OCC.Core.Graphic3d import Graphic3d_TMF_TriedronPers  # type: ignore
-                    vc.SetTransformPersistence(Graphic3d_TMF_TriedronPers)
-                    print("[Viewer] ViewCube transform persistence set (TriedronPers)")
-                    anchored = True
-                except Exception:
-                    try:
-                        from OCC.Core.Graphic3d import Graphic3d_TMF_2d  # type: ignore
-                        vc.SetTransformPersistence(Graphic3d_TMF_2d)
-                        print("[Viewer] ViewCube transform persistence set (2d)")
-                        anchored = True
-                    except Exception:
-                        try:
-                            print("[Viewer] Transform persistence APIs not available; cube will be in world space")
-                        except Exception:
-                            pass
-            # Try to force top-most Z layer so cube renders above geometry
-            try:
-                from OCC.Core.Graphic3d import Graphic3d_ZLayerId_Topmost  # type: ignore
-                self._ctx.SetZLayer(vc, Graphic3d_ZLayerId_Topmost)
-                print("[Viewer] ViewCube moved to topmost Z layer")
-            except Exception:
-                try:
-                    from OCC.Core.Graphic3d import Graphic3d_ZLayerId_TopOSD  # type: ignore
-                    self._ctx.SetZLayer(vc, Graphic3d_ZLayerId_TopOSD)
-                    print("[Viewer] ViewCube moved to top OSD layer")
-                except Exception:
-                    try:
-                        print("[Viewer] Could not change Z layer for ViewCube")
-                    except Exception:
-                        pass
-            # Optional colors (keep default if API missing)
-            try:
-                vc.SetAxesColor(Quantity_Color(1.0, 1.0, 1.0, Quantity_TOC_RGB))
-                print("[Viewer] AIS_ViewCube axes color set")
-            except Exception:
-                try:
-                    print("[Viewer] AIS_ViewCube.SetAxesColor not available")
-                except Exception:
-                    pass
-            self._ctx.Display(vc, True)
-            try:
-                print("[Viewer] AIS_ViewCube displayed via Context.Display")
-            except Exception:
-                pass
-            self._view_cube = vc
-        except Exception:
-            try:
-                import traceback
-                print("[Viewer] Failed to add AIS_ViewCube:\n" + traceback.format_exc())
+                self._viewer._display.View.TriedronDisplay()
             except Exception:
                 pass
 
