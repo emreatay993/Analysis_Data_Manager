@@ -34,7 +34,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.parts_view = PartsView(self.current_project)
         self.analyses_view = AnalysesView(self.current_project)
-        self.assemblies_view = AssembliesView(self.current_project)
+        self.assemblies_view = AssembliesView(self.current_project, self)
         self.admin_view = AdminView(self)
 
         self.tabs.addTab(self.parts_view, "Parts & Revisions")
@@ -45,7 +45,7 @@ class MainWindow(QtWidgets.QMainWindow):
         ensure_project_skeleton(self.current_project)
         store.seed_tables(self.current_project)
 
-        # Auto-refresh timer
+        # Auto-refresh timer (avoid refreshing Assemblies to keep camera stable)
         self.timer = QtCore.QTimer(self)
         self.timer.timeout.connect(self.refresh_views)
         self.timer.start(max(1000, int(self.settings.refresh_seconds) * 1000))
@@ -59,9 +59,9 @@ class MainWindow(QtWidgets.QMainWindow):
         return self.project_combo.currentText() or self.settings.default_project
 
     def refresh_views(self):
+        # Refresh parts and analyses frequently; leave assemblies view untouched to avoid recentering
         self.parts_view.refresh()
         self.analyses_view.refresh()
-        self.assemblies_view.refresh()
 
     def on_project_changed(self, code: str):
         ensure_project_skeleton(code)

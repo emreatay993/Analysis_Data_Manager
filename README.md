@@ -83,3 +83,45 @@ Sprint 1 delivers: project switcher, CSV layer with locks, Admin basics, Parts/R
 5. Logging
    - Open `%APPDATA%/TFApp/logs/app.log`.
    - Expected: File exists; future warnings/info will appear here.
+
+---
+
+## OCC setup (Windows)
+- Preferred: `cadquery-ocp` (provides `OCP.*` bindings)
+  ```powershell
+  python -m pip install --upgrade pip setuptools wheel
+  python -m pip install cadquery-ocp
+  python -c "from OCP.STEPControl import STEPControl_Reader; print('OCP OK')"
+  ```
+- Alternative: `OCP` (wraps platform wheel)
+  ```powershell
+  python -m pip install OCP
+  python -c "from OCP.BRepExtrema import BRepExtrema_DistShapeShape; print('OCP Dist OK')"
+  ```
+- If using conda and prefer `pythonocc-core`:
+  ```powershell
+  conda create -n occ310 python=3.10 -y
+  conda activate occ310
+  conda install -c conda-forge pythonocc-core=7.7.* -y
+  python -c "from OCC.Core.STEPControl import STEPControl_Reader; print('pythonocc OK')"
+  ```
+- Requirements: 64‑bit Python, Microsoft Visual C++ 2015–2022 (x64) redistributable.
+
+---
+
+## OCC-based contacts and viewer (current step)
+- Distances: compute min gaps via OCC (OCP/pythonocc-core). Classification:
+  - penetration: common volume > 1e-6 mm³ → `min_gap_mm = -0.002`
+  - touching: |gap| ≤ 0.002 mm and negligible common volume
+  - clearance: 0.002 < gap ≤ 5.0 mm
+  - omitted: gap > 5.0 mm (not listed)
+- Assemblies tab: button “Compute Contacts (OCC)” stores measured gaps in `contacts.csv`.
+- Viewer (planned next): embed OCC viewer and highlight pairs when selecting a contact row.
+
+### Acceptance checklist (OCC distances)
+1. Ensure OCC is available (see OCC setup above).
+2. Ingest STEP files so `revisions.csv.step_path` is populated.
+3. Add at least two members to an assembly and press “Compute Contacts (OCC)”.
+   - Expected: `contacts.csv` updates with numeric `min_gap_mm` and a `relation` per pair.
+   - Expected: pairs with clearance > 5 mm are not listed.
+4. Switch projects and repeat; contacts remain isolated per project.

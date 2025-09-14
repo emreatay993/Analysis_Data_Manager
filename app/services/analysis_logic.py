@@ -21,6 +21,14 @@ ALLOWED_STATUSES = [
 ]
 
 
+def get_analysis_row(project: str, analysis_id: str) -> Dict[str, str] | None:
+    rows = store.read_all(project, "analyses.csv")
+    for r in rows:
+        if r.get("project") == project and r.get("analysis_id") == analysis_id:
+            return r
+    return None
+
+
 def create_analysis(project: str, analysis_id: str, part_base: str, rev_index: int, requester: str, analyst: str, tags: str) -> None:
     folder = analysis_folder(project, part_base, analysis_id)
     os.makedirs(folder, exist_ok=True)
@@ -41,7 +49,6 @@ def create_analysis(project: str, analysis_id: str, part_base: str, rev_index: i
         "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
     store.append_row(project, "analyses.csv", row)
-    # Notify stakeholders
     notify_policy.notify_analysis_created(project, row)
 
 
@@ -56,18 +63,24 @@ def add_analysis_note(project: str, analysis_id: str, event_type: str, author: s
     })
 
 
-def reassign_analysis(project: str, analysis_id: str, new_analyst: str, author: str, notes: str) -> None:
+def reassign_analysis(project: str, analysis_id: str, new_analyst: str, author: str, notes: str) -> bool:
     rows = store.read_all(project, "analyses.csv")
     for r in rows:
         if r.get("project") == project and r.get("analysis_id") == analysis_id:
+            if (r.get("status", "").lower() in ("presented", "archived")):
+                return False
             r["analyst"] = new_analyst
             r["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
-            break
-    store.write_rows(project, "analyses.csv", rows)
-    add_analysis_note(project, analysis_id, "reassigned", author, notes)
+            store.write_rows(project, "analyses.csv", rows)
+            add_analysis_note(project, analysis_id, "reassigned", author, notes)
+            return True
+    return False
 
 
-def add_load_case(project: str, analysis_id: str, load_case_id: str, name: str, author: str, notes: str) -> None:
+def add_load_case(project: str, analysis_id: str, load_case_id: str, name: str, author: str, notes: str) -> bool:
+    r = get_analysis_row(project, analysis_id)
+    if not r or (r.get("status", "").lower() in ("presented", "archived")):
+        return False
     store.append_row(project, "load_cases.csv", {
         "project": project,
         "analysis_id": analysis_id,
@@ -77,6 +90,7 @@ def add_load_case(project: str, analysis_id: str, load_case_id: str, name: str, 
         "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     })
     add_analysis_note(project, analysis_id, "new_load_case", author, notes)
+    return True
 
 
 def change_status(project: str, analysis_id: str, new_status: str, by: str, comment: str, presentation_number: str = "") -> bool:
@@ -89,6 +103,11 @@ def change_status(project: str, analysis_id: str, new_status: str, by: str, comm
         if r.get("project") == project and r.get("analysis_id") == analysis_id:
             row_obj = r
             old_status = r.get("status", "")
+            # Freeze: once presented, only allow archive
+            if (old_status or "").lower() == "presented" and new_status != "archived":
+                return False
+            if (old_status or "").lower() == "archived":
+                return False
             r["status"] = new_status
             if new_status == "presented":
                 r["presentation_number"] = presentation_number
