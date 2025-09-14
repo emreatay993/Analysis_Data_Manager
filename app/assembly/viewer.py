@@ -1,4 +1,4 @@
-from PyQt5 import QtWidgets
+from PyQt5 import QtWidgets, QtCore, QtGui
 
 # Try pythonocc-core Qt viewer first
 try:
@@ -31,6 +31,15 @@ class AssemblyViewer(QtWidgets.QWidget):
         super().__init__(parent)
         layout = QtWidgets.QVBoxLayout(self)
         self._name_to_item = {}
+        self._name_to_base_color = {}
+        self._palette_index = 0
+        # 9-class ColorBrewer RdYlBu palette (hex)
+        self._palette_hex = [
+            "#d73027", "#f46d43", "#fdae61", "#fee090", "#ffffbf",
+            "#e0f3f8", "#abd9e9", "#74add1", "#4575b4",
+        ]
+        # Distinct highlight color (bright green)
+        self._highlight_rgb = (0.1, 0.8, 0.2)
         self._mode = 'none'
         self._did_initial_fit = False
 
@@ -41,9 +50,18 @@ class AssemblyViewer(QtWidgets.QWidget):
             layout.addWidget(self._viewer)
             self._ctx = self._viewer._display.Context
             self._mode = 'occt'
+            try:
+                print("[Viewer] Initialized OCC viewer (qtViewer3d) successfully.")
+            except Exception:
+                pass
             # Fit-all on double click when available
             try:
                 self._viewer.sig_double_click.connect(lambda: self._viewer._display.FitAll())
+            except Exception:
+                pass
+            # Orientation widget: show only a view cube (larger) and disable triedron
+            try:
+                self._add_view_cube_only()
             except Exception:
                 pass
             return
@@ -56,15 +74,38 @@ class AssemblyViewer(QtWidgets.QWidget):
             self._bbox_min = None
             self._bbox_max = None
             self._mode = 'gl'
+            # Orientation axes for GL fallback
+            try:
+                print("[Viewer] GL fallback active; adding GLAxisItem for orientation.")
+                ax = gl.GLAxisItem()
+                ax.setSize(x=120, y=120, z=120)
+                self._view.addItem(ax)
+                self._axis_item = ax
+                try:
+                    print("[Viewer] GL axis created (size ~120).")
+                except Exception:
+                    pass
+            except Exception:
+                self._axis_item = None
             return
 
         layout.addWidget(QtWidgets.QLabel("3D viewer unavailable. Install pythonocc-core (preferred) or PyOpenGL + pyqtgraph."))
+        
+        # Overlay axes widget (always-on)
+        try:
+            self._axes_overlay = _AxesOverlayWidget(self)
+            self._axes_overlay.show()
+            self._update_overlay_position()
+        except Exception:
+            self._axes_overlay = None
 
     def clear(self):
         if self._mode == 'occt':
             try:
                 self._viewer._display.EraseAll()
                 self._name_to_item.clear()
+                self._name_to_base_color.clear()
+                self._palette_index = 0
                 self._did_initial_fit = False
             except Exception:
                 pass
@@ -72,6 +113,8 @@ class AssemblyViewer(QtWidgets.QWidget):
             for item in list(self._name_to_item.values()):
                 self._view.removeItem(item)
             self._name_to_item.clear()
+            self._name_to_base_color.clear()
+            self._palette_index = 0
             self._bbox_min = None
             self._bbox_max = None
             self._did_initial_fit = False
@@ -82,6 +125,11 @@ class AssemblyViewer(QtWidgets.QWidget):
             try:
                 ais = AIS_Shape(shape)
                 self._ctx.Display(ais, True)
+                base_rgb = self._get_or_assign_base_rgb(name)
+                try:
+                    self._ctx.SetColor(ais, Quantity_Color(base_rgb[0], base_rgb[1], base_rgb[2], Quantity_TOC_RGB), False)
+                except Exception:
+                    pass
                 self._name_to_item[name] = ais
                 if not self._did_initial_fit:
                     self._viewer._display.FitAll()
@@ -94,18 +142,46 @@ class AssemblyViewer(QtWidgets.QWidget):
             for n, ais in self._name_to_item.items():
                 try:
                     if n == name_a or n == name_b:
-                        self._ctx.SetColor(ais, Quantity_Color(1.0, 0.4, 0.2, Quantity_TOC_RGB), False)
+                        self._ctx.SetColor(ais, Quantity_Color(self._highlight_rgb[0], self._highlight_rgb[1], self._highlight_rgb[2], Quantity_TOC_RGB), False)
                     else:
-                        self._ctx.SetColor(ais, Quantity_Color(0.7, 0.7, 0.7, Quantity_TOC_RGB), False)
+                        base_rgb = self._name_to_base_color.get(n, (0.7, 0.7, 0.7))
+                        self._ctx.SetColor(ais, Quantity_Color(base_rgb[0], base_rgb[1], base_rgb[2], Quantity_TOC_RGB), False)
                 except Exception:
                     continue
             self._viewer._display.Repaint()
         elif self._mode == 'gl':
             for n, item in self._name_to_item.items():
                 if n == name_a or n == name_b:
-                    item.setColor((1.0, 0.4, 0.2, 1.0))
+                    item.setColor((self._highlight_rgb[0], self._highlight_rgb[1], self._highlight_rgb[2], 1.0))
                 else:
-                    item.setColor((0.7, 0.7, 0.7, 1.0))
+                    base_rgb = self._name_to_base_color.get(n, (0.7, 0.7, 0.7))
+                    item.setColor((base_rgb[0], base_rgb[1], base_rgb[2], 1.0))
+
+    def clear_highlight(self):
+        if self._mode == 'occt':
+            for _, ais in self._name_to_item.items():
+                try:
+                    # Restore each item's base color
+                    name_match = None
+                    for k, v in self._name_to_item.items():
+                        if v is ais:
+                            name_match = k
+                            break
+                    base_rgb = self._name_to_base_color.get(name_match, (0.7, 0.7, 0.7))
+                    self._ctx.SetColor(ais, Quantity_Color(base_rgb[0], base_rgb[1], base_rgb[2], Quantity_TOC_RGB), False)
+                except Exception:
+                    continue
+            try:
+                self._viewer._display.Repaint()
+            except Exception:
+                pass
+        elif self._mode == 'gl':
+            for name, item in self._name_to_item.items():
+                try:
+                    base_rgb = self._name_to_base_color.get(name, (0.7, 0.7, 0.7))
+                    item.setColor((base_rgb[0], base_rgb[1], base_rgb[2], 1.0))
+                except Exception:
+                    continue
 
     # ====== GL fallback path ======
     def _accumulate_bounds(self, vertices):
@@ -141,8 +217,187 @@ class AssemblyViewer(QtWidgets.QWidget):
             pass
         if name in self._name_to_item:
             self._view.removeItem(self._name_to_item[name])
-        mesh = gl.GLMeshItem(vertexes=vertices, faces=faces, smooth=False, drawEdges=True, edgeColor=(0.2,0.2,0.2,1), color=color)
+        base_rgb = self._get_or_assign_base_rgb(name)
+        mesh = gl.GLMeshItem(vertexes=vertices, faces=faces, smooth=False, drawEdges=True, edgeColor=(0.2,0.2,0.2,1), color=(base_rgb[0], base_rgb[1], base_rgb[2], 1.0))
         mesh.setGLOptions('opaque')
         self._name_to_item[name] = mesh
         self._view.addItem(mesh)
         self._accumulate_bounds(vertices)
+
+    def resizeEvent(self, event):
+        try:
+            super().resizeEvent(event)
+        except Exception:
+            pass
+        try:
+            self._update_overlay_position()
+        except Exception:
+            pass
+
+    def _update_overlay_position(self):
+        if getattr(self, '_axes_overlay', None) is None:
+            return
+        margin = 10
+        w = self._axes_overlay.width()
+        h = self._axes_overlay.height()
+        self._axes_overlay.move(max(0, self.width() - w - margin), max(0, self.height() - h - margin))
+
+    # ====== Color helpers ======
+    def _hex_to_rgbf(self, hex_str: str):
+        hs = hex_str.lstrip('#')
+        if len(hs) == 6:
+            r = int(hs[0:2], 16) / 255.0
+            g = int(hs[2:4], 16) / 255.0
+            b = int(hs[4:6], 16) / 255.0
+            return (r, g, b)
+        return (0.7, 0.7, 0.7)
+
+    def _get_or_assign_base_rgb(self, name: str):
+        if name in self._name_to_base_color:
+            return self._name_to_base_color[name]
+        hex_color = self._palette_hex[self._palette_index % len(self._palette_hex)]
+        self._palette_index += 1
+        rgb = self._hex_to_rgbf(hex_color)
+        self._name_to_base_color[name] = rgb
+        return rgb
+
+    # ====== Orientation (OCC): View cube only ======
+    def _add_view_cube_only(self):
+        try:
+            disp = self._viewer._display
+            # Ensure no triedron is displayed
+            try:
+                print("[Viewer] Attempting to erase triedron (if any) and add AIS_ViewCube only...")
+                if hasattr(disp, 'View'):
+                    v = getattr(disp, 'View')
+                    try:
+                        v.TriedronErase()
+                        print("[Viewer] TriedronErase called on View.")
+                    except Exception:
+                        try:
+                            print("[Viewer] TriedronErase not available on View.")
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+            # Add a larger AIS_ViewCube
+            from OCC.Core.AIS import AIS_ViewCube  # type: ignore
+            vc = AIS_ViewCube()
+            try:
+                vc.SetSize(120.0)
+                print("[Viewer] AIS_ViewCube size set to 120.0")
+            except Exception:
+                try:
+                    print("[Viewer] AIS_ViewCube.SetSize not available")
+                except Exception:
+                    pass
+            try:
+                vc.SetBoxFacetExtension(1.0)
+                print("[Viewer] AIS_ViewCube facet extension set")
+            except Exception:
+                try:
+                    print("[Viewer] AIS_ViewCube.SetBoxFacetExtension not available")
+                except Exception:
+                    pass
+            # Try to anchor the cube to a screen corner (transform persistence)
+            anchored = False
+            try:
+                from OCC.Core.Graphic3d import Graphic3d_TMF_TriedronPers, Graphic3d_TransformPers  # type: ignore
+                from OCC.Core.gp import gp_Pnt  # type: ignore
+                tp = Graphic3d_TransformPers(Graphic3d_TMF_TriedronPers, gp_Pnt(1.0, -1.0, 0.0))
+                vc.SetTransformPersistence(tp)
+                print("[Viewer] ViewCube transform persistence set (TriedronPers, +corner point)")
+                anchored = True
+            except Exception:
+                try:
+                    from OCC.Core.Graphic3d import Graphic3d_TMF_TriedronPers  # type: ignore
+                    vc.SetTransformPersistence(Graphic3d_TMF_TriedronPers)
+                    print("[Viewer] ViewCube transform persistence set (TriedronPers)")
+                    anchored = True
+                except Exception:
+                    try:
+                        from OCC.Core.Graphic3d import Graphic3d_TMF_2d  # type: ignore
+                        vc.SetTransformPersistence(Graphic3d_TMF_2d)
+                        print("[Viewer] ViewCube transform persistence set (2d)")
+                        anchored = True
+                    except Exception:
+                        try:
+                            print("[Viewer] Transform persistence APIs not available; cube will be in world space")
+                        except Exception:
+                            pass
+            # Try to force top-most Z layer so cube renders above geometry
+            try:
+                from OCC.Core.Graphic3d import Graphic3d_ZLayerId_Topmost  # type: ignore
+                self._ctx.SetZLayer(vc, Graphic3d_ZLayerId_Topmost)
+                print("[Viewer] ViewCube moved to topmost Z layer")
+            except Exception:
+                try:
+                    from OCC.Core.Graphic3d import Graphic3d_ZLayerId_TopOSD  # type: ignore
+                    self._ctx.SetZLayer(vc, Graphic3d_ZLayerId_TopOSD)
+                    print("[Viewer] ViewCube moved to top OSD layer")
+                except Exception:
+                    try:
+                        print("[Viewer] Could not change Z layer for ViewCube")
+                    except Exception:
+                        pass
+            # Optional colors (keep default if API missing)
+            try:
+                vc.SetAxesColor(Quantity_Color(1.0, 1.0, 1.0, Quantity_TOC_RGB))
+                print("[Viewer] AIS_ViewCube axes color set")
+            except Exception:
+                try:
+                    print("[Viewer] AIS_ViewCube.SetAxesColor not available")
+                except Exception:
+                    pass
+            self._ctx.Display(vc, True)
+            try:
+                print("[Viewer] AIS_ViewCube displayed via Context.Display")
+            except Exception:
+                pass
+            self._view_cube = vc
+        except Exception:
+            try:
+                import traceback
+                print("[Viewer] Failed to add AIS_ViewCube:\n" + traceback.format_exc())
+            except Exception:
+                pass
+
+
+class _AxesOverlayWidget(QtWidgets.QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, True)
+        self.setAttribute(QtCore.Qt.WA_TranslucentBackground, True)
+        self.setFixedSize(100, 100)
+
+    def paintEvent(self, event):
+        p = QtGui.QPainter(self)
+        p.setRenderHint(QtGui.QPainter.Antialiasing, True)
+        # Draw semi-transparent background circle for contrast
+        bg = QtGui.QColor(255, 255, 255, 35)
+        p.setBrush(bg)
+        p.setPen(QtCore.Qt.NoPen)
+        r = min(self.width(), self.height()) - 6
+        p.drawEllipse(QtCore.QPointF(self.width() - r/2 - 3, self.height() - r/2 - 3), r/2, r/2)
+        # Center near bottom-right inside the circle
+        cx = self.width() - r/2 - 3
+        cy = self.height() - r/2 - 3
+        scale = r * 0.35
+
+        def draw_axis(dx, dy, color, label):
+            pen = QtGui.QPen(QtGui.QColor(*color), 2)
+            p.setPen(pen)
+            p.drawLine(QtCore.QPointF(cx, cy), QtCore.QPointF(cx + dx * scale, cy + dy * scale))
+            # Arrowhead
+            ah = 6
+            p.drawEllipse(QtCore.QPointF(cx + dx * scale, cy + dy * scale), 1.5, 1.5)
+            # Label
+            p.setPen(QtGui.QPen(QtGui.QColor(0, 0, 0)))
+            p.drawText(QtCore.QPointF(cx + dx * (scale + 10), cy + dy * (scale + 10)), label)
+
+        # Fixed isometric directions (screen space):
+        # X → right, Y → up-left, Z → up-right (stylized triad)
+        draw_axis(1.0, 0.0, (215, 48, 39), 'X')     # red-ish
+        draw_axis(-0.6, -0.8, (29, 187, 75), 'Y')   # green
+        draw_axis(0.6, -0.8, (69, 117, 180), 'Z')   # blue
+        p.end()

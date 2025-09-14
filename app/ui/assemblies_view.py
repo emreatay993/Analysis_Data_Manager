@@ -297,11 +297,31 @@ class AssembliesView(QtWidgets.QWidget):
         self.refresh_members()
 
     def on_contact_selected(self):
-        row = self.contacts.currentRow()
-        if row < 0:
+        sel = self.contacts.selectionModel()
+        # Clear highlight if there is no selection (e.g., user clicked empty space)
+        if sel is None or not sel.hasSelection():
+            try:
+                self.viewer.clear_highlight()
+            except Exception:
+                pass
             return
-        a = self.contacts.item(row, 0).text()
-        a_rev = self.contacts.item(row, 1).text()
-        b = self.contacts.item(row, 2).text()
-        b_rev = self.contacts.item(row, 3).text()
-        self.viewer.highlight_pair(f"{a}_{a_rev}", f"{b}_{b_rev}")
+        # Use the first selected row (currentRow may remain set after selection clears)
+        indexes = sel.selectedIndexes()
+        row = indexes[0].row() if indexes else -1
+        if row < 0:
+            try:
+                self.viewer.clear_highlight()
+            except Exception:
+                pass
+            return
+        try:
+            a = (self.contacts.item(row, 0) or QtWidgets.QTableWidgetItem("")).text()
+            a_rev = (self.contacts.item(row, 1) or QtWidgets.QTableWidgetItem("")).text()
+            b = (self.contacts.item(row, 2) or QtWidgets.QTableWidgetItem("")).text()
+            b_rev = (self.contacts.item(row, 3) or QtWidgets.QTableWidgetItem("")).text()
+            self.viewer.highlight_pair(f"{a}_{a_rev}", f"{b}_{b_rev}")
+        except Exception:
+            try:
+                self.viewer.clear_highlight()
+            except Exception:
+                pass

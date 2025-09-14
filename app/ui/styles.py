@@ -128,12 +128,44 @@ inputs_style = """
     }
 """
 
+splitter_style = """
+    QSplitter::handle {
+        background-color: #cce4ff;
+        border: 1px solid #5b9bd5;
+        margin: 2px;
+    }
+    QSplitter::handle:hover {
+        background-color: #abd9e9;
+    }
+    QSplitter::handle:horizontal {
+        width: 6px;
+    }
+    QSplitter::handle:vertical {
+        height: 6px;
+    }
+"""
+
+main_window_separator_style = """
+    QMainWindow::separator {
+        background-color: #cce4ff;
+        border: 1px solid #5b9bd5;
+        width: 6px;   /* thickness for vertical separators */
+        height: 6px;  /* thickness for horizontal separators */
+        margin: 0px;
+    }
+    QMainWindow::separator:hover {
+        background-color: #abd9e9;
+    }
+"""
+
 app_stylesheet = "\n".join([
     button_style,
     tab_style,
     menu_style,
     combobox_style,
     inputs_style,
+    splitter_style,
+    main_window_separator_style,
 ])
 
 
