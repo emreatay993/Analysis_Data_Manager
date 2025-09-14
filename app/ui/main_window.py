@@ -14,7 +14,8 @@ class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("TF Engineering Data Manager - Sprint 1")
-        self.resize(1200, 800)
+        # Set a slightly larger normal/restored size
+        self.resize(1440, 900)
         self.settings = load_admin_settings()
         self.projects = load_projects_registry()
 
@@ -59,6 +60,13 @@ class MainWindow(QtWidgets.QMainWindow):
         # File watcher
         self.watcher = ProjectWatcher(self.current_project, on_change=self.refresh_views)
         self.watcher.start()
+        # Restore main window geometry (do not restore dock layout)
+        self._restore_window_state()
+        # Ensure maximized at first show if nothing to restore
+        try:
+            QtCore.QTimer.singleShot(0, self._restore_window_state)
+        except Exception:
+            pass
 
     @property
     def current_project(self) -> str:
@@ -83,6 +91,44 @@ class MainWindow(QtWidgets.QMainWindow):
         self.watcher = ProjectWatcher(self.current_project, on_change=self.refresh_views)
         self.watcher.start()
         self.statusBar().showMessage(f"Project switched to {code}")
+
+    def _settings(self) -> QtCore.QSettings:
+        return QtCore.QSettings("TFEngineering", "AnalysisDataManager")
+
+    def _restore_window_state(self) -> None:
+        try:
+            s = self._settings()
+            try:
+                geom = s.value("mainWindow/geometry", None, type=QtCore.QByteArray)
+            except Exception:
+                geom = s.value("mainWindow/geometry", None)
+            restored_any = False
+            if isinstance(geom, (bytes, bytearray, QtCore.QByteArray)) and len(geom) > 0:
+                try:
+                    self.restoreGeometry(geom)
+                    restored_any = True
+                except Exception:
+                    pass
+            if not restored_any:
+                # First run: start maximized by default
+                try:
+                    self.setWindowState(self.windowState() | QtCore.Qt.WindowMaximized)
+                except Exception:
+                    pass
+        except Exception:
+            try:
+                self.setWindowState(self.windowState() | QtCore.Qt.WindowMaximized)
+            except Exception:
+                pass
+
+    def closeEvent(self, event):
+        # Persist main window geometry and dock layout for next session
+        try:
+            s = self._settings()
+            s.setValue("mainWindow/geometry", self.saveGeometry())
+        except Exception:
+            pass
+        super().closeEvent(event)
 
     def reload_projects(self, select_code: str | None = None) -> None:
         """Reload the projects registry and repopulate the combobox immediately."""

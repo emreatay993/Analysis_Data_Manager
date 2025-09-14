@@ -13,14 +13,14 @@ class AssembliesView(QtWidgets.QWidget):
         self._main_window = main_window
         self._dock_widget: QtWidgets.QDockWidget | None = None
         self._setup_ui()
-        # Restore previous dock/floating state if any
-        try:
-            self._restore_viewer_dock_state()
-        except Exception:
-            pass
-        # Ensure a dock exists even on first run without settings
-        if self._dock_widget is None and self._main_window is not None:
-            self._create_viewer_dock()
+        # Create viewer dock in a sensible default position/size
+        if self._main_window is not None:
+            self._create_viewer_dock(area=QtCore.Qt.TopDockWidgetArea)
+            # Defer sizing until window is shown to compute correct height
+            try:
+                QtCore.QTimer.singleShot(0, self._set_initial_dock_size)
+            except Exception:
+                pass
         self.refresh()
 
     def set_project(self, project: str):
@@ -92,15 +92,11 @@ class AssembliesView(QtWidgets.QWidget):
         dock.setFeatures(QtWidgets.QDockWidget.DockWidgetMovable | QtWidgets.QDockWidget.DockWidgetFloatable)
         dock.setMinimumSize(400, 300)
         dock.setWidget(self.viewer)
-        self._main_window.addDockWidget(area or QtCore.Qt.RightDockWidgetArea, dock)
-        # Connect signals to keep settings in sync and manage window flags
+        self._main_window.addDockWidget(area or QtCore.Qt.TopDockWidgetArea, dock)
+        # Connect signals to manage floating window flags
         dock.topLevelChanged.connect(self._on_dock_top_level_changed)
-        try:
-            dock.dockLocationChanged.connect(lambda _area: self._save_viewer_dock_settings())
-        except Exception:
-            pass
         self._dock_widget = dock
-        # Apply persisted floating/geometry if requested
+        # Apply floating/geometry if explicitly requested by caller
         try:
             if floating is True:
                 dock.setFloating(True)
@@ -112,9 +108,8 @@ class AssembliesView(QtWidgets.QWidget):
                 else:
                     dock.resize(900, 700)
                 self._apply_floating_window_flags()
-        finally:
-            # Persist current state
-            self._save_viewer_dock_settings()
+        except Exception:
+            pass
 
     def _on_dock_top_level_changed(self, floating: bool):
         # Ensure floating dock can be maximized and has sensible size
@@ -127,8 +122,7 @@ class AssembliesView(QtWidgets.QWidget):
                     self._dock_widget.resize(max(900, self._dock_widget.width()), max(700, self._dock_widget.height()))
                 except Exception:
                     pass
-        # Persist new state
-        self._save_viewer_dock_settings()
+        # No persistence needed
 
     def _apply_floating_window_flags(self):
         try:
@@ -145,45 +139,19 @@ class AssembliesView(QtWidgets.QWidget):
         except Exception:
             pass
 
-    def _settings(self) -> QtCore.QSettings:
-        return QtCore.QSettings("TFEngineering", "AnalysisDataManager")
-
-    def _save_viewer_dock_settings(self):
+    def _set_initial_dock_size(self):
+        # Make the dock consume a sensible portion of the window height initially
+        if self._dock_widget is None or self._main_window is None:
+            return
         try:
-            s = self._settings()
-            if self._dock_widget is None:
-                return
-            s.setValue("viewerDock/floating", self._dock_widget.isFloating())
-            try:
-                area = self._main_window.dockWidgetArea(self._dock_widget) if self._main_window is not None else int(QtCore.Qt.RightDockWidgetArea)
-            except Exception:
-                area = int(QtCore.Qt.RightDockWidgetArea)
-            s.setValue("viewerDock/area", int(area))
-            # Save geometry only when floating
-            if self._dock_widget.isFloating():
-                try:
-                    s.setValue("viewerDock/geometry", self._dock_widget.saveGeometry())
-                except Exception:
-                    pass
+            target_height = max(400, int(self._main_window.height() * 0.7))
+            self._main_window.resizeDocks([self._dock_widget], [target_height], QtCore.Qt.Vertical)
         except Exception:
-            pass
-
-    def _restore_viewer_dock_state(self):
-        try:
-            s = self._settings()
-            # Read target area, floating state, and geometry
-            raw_area = s.value("viewerDock/area", int(QtCore.Qt.RightDockWidgetArea))
             try:
-                area = QtCore.Qt.DockWidgetArea(int(raw_area))
+                # Fallback: direct resize
+                self._dock_widget.resize(self._dock_widget.width(), max(400, int(self._main_window.height() * 0.7)))
             except Exception:
-                area = QtCore.Qt.RightDockWidgetArea
-            raw_floating = s.value("viewerDock/floating", False)
-            floating = bool(raw_floating in (True, "true", "1", 1))
-            geometry = s.value("viewerDock/geometry", None)
-            # Create dock in the saved area/state
-            self._create_viewer_dock(area=area, floating=floating, geometry=geometry)
-        except Exception:
-            pass
+                pass
 
     def refresh(self):
         store.seed_tables(self._project)
