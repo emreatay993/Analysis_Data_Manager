@@ -1,6 +1,6 @@
 from PyQt5 import QtWidgets, QtCore
 from app.data import store
-from app.assembly.contact_detection import compute_contacts, compute_contacts_occ
+from app.assembly.contact_detection import compute_contacts_occ
 from app.assembly.viewer import AssemblyViewer
 from app.assembly.mesh_utils import shape_to_mesh
 from app.assembly.step_loader import load_shape_for_member
@@ -13,6 +13,7 @@ class AssembliesView(QtWidgets.QWidget):
         self._main_window = main_window
         self._dock_widget: QtWidgets.QDockWidget | None = None
         self._applied_initial_dock_size = False
+        self._viewer_content_source: str = ""  # '', 'assembly', or 'preview'
         self._setup_ui()
         # Create viewer dock in a sensible default position/size
         if self._main_window is not None:
@@ -37,12 +38,10 @@ class AssembliesView(QtWidgets.QWidget):
         actions = QtWidgets.QHBoxLayout()
         self.btn_new = QtWidgets.QPushButton("New Assembly")
         self.btn_add_member = QtWidgets.QPushButton("Add Member")
-        self.btn_contacts = QtWidgets.QPushButton("Compute Contacts (stub)")
         self.btn_contacts_occ = QtWidgets.QPushButton("Compute Contacts (OCC)")
         self.clearance_spin = QtWidgets.QDoubleSpinBox(); self.clearance_spin.setRange(0.1, 1000.0); self.clearance_spin.setValue(5.0); self.clearance_spin.setSuffix(" mm max clearance")
         actions.addWidget(self.btn_new)
         actions.addWidget(self.btn_add_member)
-        actions.addWidget(self.btn_contacts)
         actions.addWidget(self.btn_contacts_occ)
         actions.addWidget(self.clearance_spin)
 
@@ -83,7 +82,6 @@ class AssembliesView(QtWidgets.QWidget):
 
         self.btn_new.clicked.connect(self.on_new)
         self.btn_add_member.clicked.connect(self.on_add_member)
-        self.btn_contacts.clicked.connect(self.on_contacts)
         self.btn_contacts_occ.clicked.connect(self.on_contacts_occ)
         self.assemblies.currentTextChanged.connect(self.refresh_members)
         self.contacts.itemSelectionChanged.connect(self.on_contact_selected)
@@ -192,15 +190,18 @@ class AssembliesView(QtWidgets.QWidget):
         self.assemblies.blockSignals(False)
         self.refresh_members()
 
+
     def refresh_members(self):
         aid = self.assemblies.currentText()
         self.viewer.clear()
+        self._viewer_content_source = ""
         if not aid:
             self.members.setRowCount(0)
             self.contacts.setRowCount(0)
             return
         m = [r for r in store.read_all(self._project, "assembly_members.csv") if r.get("project") == self._project and r.get("assembly_id") == aid and (r.get("included","true") or "").lower()=="true"]
         self.members.setRowCount(len(m))
+        loaded_count = 0
         for i, r in enumerate(m):
             vals = [r.get("part_base",""), r.get("rev_index",""), r.get("included","true")]
             for c, v in enumerate(vals):
@@ -212,13 +213,16 @@ class AssembliesView(QtWidgets.QWidget):
                 shape = load_shape_for_member(self._project, part, rev)
                 mode = getattr(self.viewer, '_mode', '')
                 if mode == 'occt' and shape is not None:
-                    self.viewer.add_occ_shape(f"{part}_{rev}", shape)
+                    self.viewer.add_occ_shape(f"{part}_{rev}", shape); loaded_count += 1
                 else:
                     verts, faces = shape_to_mesh(shape)
                     if getattr(verts, 'size', 0) and getattr(faces, 'size', 0):
-                        self.viewer.add_mesh(f"{part}_{rev}", verts, faces)
+                        self.viewer.add_mesh(f"{part}_{rev}", verts, faces); loaded_count += 1
             except Exception:
                 pass
+        # Mark as assembly content only if at least one member shape was drawn
+        if loaded_count > 0:
+            self._viewer_content_source = "assembly"
         # Load last contacts if any
         cts = [c for c in store.read_all(self._project, "contacts.csv") if c.get("project") == self._project and c.get("assembly_id") == aid]
         self.contacts.setRowCount(len(cts))
@@ -226,6 +230,44 @@ class AssembliesView(QtWidgets.QWidget):
             vals = [c.get("a_part",""), c.get("a_rev",""), c.get("b_part",""), c.get("b_rev",""), c.get("relation",""), c.get("min_gap_mm","")]
             for j, v in enumerate(vals):
                 self.contacts.setItem(i, j, QtWidgets.QTableWidgetItem(v))
+
+    def is_showing_assembly(self) -> bool:
+        return getattr(self, '_viewer_content_source', '') == 'assembly'
+
+    def show_parts_preview(self, parts_with_revs: list[tuple[str, int]]):
+        # If an assembly is displayed, highlight matching parts within the assembly instead
+        if self.is_showing_assembly():
+            try:
+                # Names in the viewer are stored as "{part}_{rev}"; match by part prefix
+                names = []
+                for part, rev in parts_with_revs:
+                    prefix = f"{part}_"
+                    for n in list(getattr(self.viewer, '_name_to_item', {}).keys()):
+                        if n.startswith(prefix):
+                            names.append(n)
+                if names:
+                    self.viewer.highlight_names(names)
+                else:
+                    # If no matches, do nothing (keep current assembly view)
+                    return
+                return
+            except Exception:
+                return
+        # Otherwise, clear and show selected parts as ad-hoc preview
+        self.viewer.clear()
+        for part, rev in parts_with_revs:
+            try:
+                shape = load_shape_for_member(self._project, part, int(rev))
+                mode = getattr(self.viewer, '_mode', '')
+                if mode == 'occt' and shape is not None:
+                    self.viewer.add_occ_shape(f"{part}_{rev}", shape)
+                else:
+                    verts, faces = shape_to_mesh(shape)
+                    if getattr(verts, 'size', 0) and getattr(faces, 'size', 0):
+                        self.viewer.add_mesh(f"{part}_{rev}", verts, faces)
+            except Exception:
+                continue
+        self._viewer_content_source = "preview"
 
     def on_new(self):
         aid, ok = QtWidgets.QInputDialog.getText(self, "New Assembly", "Assembly ID:")
@@ -276,15 +318,7 @@ class AssembliesView(QtWidgets.QWidget):
         members = [(r.get("part_base",""), int(r.get("rev_index","0") or 0)) for r in m]
         return aid, members
 
-    def on_contacts(self):
-        aid, members = self._gather_members()
-        if not aid or not members:
-            return
-        contacts = compute_contacts(self._project, aid, members, clearance_max_mm=self.clearance_spin.value())
-        allc = [c for c in store.read_all(self._project, "contacts.csv") if not (c.get("project") == self._project and c.get("assembly_id") == aid)]
-        allc.extend(contacts)
-        store.write_rows(self._project, "contacts.csv", allc)
-        self.refresh_members()
+    
 
     def on_contacts_occ(self):
         aid, members = self._gather_members()

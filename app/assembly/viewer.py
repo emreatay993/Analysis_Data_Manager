@@ -45,8 +45,19 @@ class AssemblyViewer(QtWidgets.QWidget):
         self._mode = 'none'
         self._did_initial_fit = False
         self._is_perspective = True
+        self._lights_enabled = False
 
-        # Controls hint removed
+        # Help button overlay (top-right)
+        try:
+            self._help_btn = QtWidgets.QToolButton(self)
+            self._help_btn.setText("?")
+            self._help_btn.setToolTip("Viewer shortcuts")
+            self._help_btn.setAutoRaise(True)
+            self._help_btn.setCursor(QtGui.QCursor(QtCore.Qt.PointingHandCursor))
+            self._help_btn.clicked.connect(self._show_shortcuts_help)
+            self._help_btn.raise_()
+        except Exception:
+            self._help_btn = None
 
         if OCC_QT_OK:
             self._viewer = qtViewer3d(self)
@@ -57,10 +68,16 @@ class AssemblyViewer(QtWidgets.QWidget):
                 print("[Viewer] Initialized OCC viewer (qtViewer3d) successfully.")
             except Exception:
                 pass
+            # Route key presses from the inner OCC widget to this widget's handler
+            try:
+                self._viewer.installEventFilter(self)
+            except Exception:
+                pass
             # Fit-all on double click when available
             try:
                 self._viewer.sig_double_click.connect(lambda: self._viewer._display.FitAll())
-            except Exception:
+            except Exception as e:
+                print(e)
                 pass
             # Orientation widget: show only a view cube (larger) and disable triedron
             try:
@@ -75,12 +92,40 @@ class AssemblyViewer(QtWidgets.QWidget):
             except Exception as e:
                 print(e)
                 pass
+            # Default: enable viewer lights and shaded model
+            try:
+                vwr = self._viewer._display.Viewer
+                view = self._viewer._display.View
+                try:
+                    vwr.SetDefaultLightsOn()
+                except Exception:
+                    pass
+                try:
+                    vwr.SetLightOn()
+                except Exception:
+                    pass
+                try:
+                    vwr.UpdateLights()
+                except Exception:
+                    pass
+                try:
+                    from OCC.Core.Graphic3d import Graphic3d_TOSM_FRAGMENT  # type: ignore
+                    view.SetShadingModel(Graphic3d_TOSM_FRAGMENT)
+                except Exception:
+                    pass
+                self._lights_enabled = True
+            except Exception:
+                pass
             return
 
         if GL_OK:
             self._view = gl.GLViewWidget()
             self._view.opts['distance'] = 200
             layout.addWidget(self._view)
+            try:
+                self._view.installEventFilter(self)
+            except Exception:
+                pass
             g = gl.GLGridItem(); g.scale(10, 10, 1); self._view.addItem(g)
             self._bbox_min = None
             self._bbox_max = None
@@ -131,6 +176,90 @@ class AssemblyViewer(QtWidgets.QWidget):
             self._did_initial_fit = False
 
     # ====== OCCT path ======
+    def _enforce_unlit(self):
+        if getattr(self, '_mode', None) != 'occt':
+            return
+        disp = getattr(self._viewer, '_display', None)
+        if disp is None:
+            return
+        view = disp.View
+        viewer_handle = disp.Viewer
+        # Deactivate all lights at once, then disable default lights and update
+        try:
+            viewer_handle.SetLightOff()
+        except Exception:
+            pass
+        try:
+            viewer_handle.SetDefaultLightsOff()
+        except Exception:
+            pass
+        try:
+            viewer_handle.UpdateLights()
+        except Exception:
+            pass
+        from OCC.Core.Graphic3d import Graphic3d_TOSM_UNLIT  # type: ignore
+        view.SetShadingModel(Graphic3d_TOSM_UNLIT)
+        disp.Repaint()
+        self._lights_enabled = False
+
+    def _toggle_default_lighting(self):
+        if self._mode != 'occt':
+            return
+        disp = getattr(self._viewer, '_display', None)
+        if disp is None:
+            return
+        view = disp.View
+        viewer_handle = disp.Viewer
+        if self._lights_enabled:
+            # Turn off
+            try:
+                viewer_handle.SetLightOff()
+            except Exception:
+                pass
+            try:
+                viewer_handle.SetDefaultLightsOff()
+            except Exception:
+                pass
+            try:
+                viewer_handle.UpdateLights()
+            except Exception:
+                pass
+            try:
+                from OCC.Core.Graphic3d import Graphic3d_TOSM_UNLIT  # type: ignore
+                view.SetShadingModel(Graphic3d_TOSM_UNLIT)
+            except Exception:
+                pass
+            self._lights_enabled = False
+        else:
+            # Turn on
+            try:
+                viewer_handle.SetDefaultLightsOn()
+            except Exception:
+                pass
+            try:
+                viewer_handle.SetLightOn()
+            except Exception:
+                pass
+            try:
+                viewer_handle.UpdateLights()
+            except Exception:
+                pass
+            try:
+                # Use default shaded model
+                from OCC.Core.Graphic3d import Graphic3d_TOSM_FRAGMENT  # type: ignore
+                view.SetShadingModel(Graphic3d_TOSM_FRAGMENT)
+            except Exception:
+                pass
+            self._lights_enabled = True
+        try:
+            disp.Repaint()
+        except Exception:
+            pass
+
+
+    
+
+    
     def add_occ_shape(self, name: str, shape):
         if self._mode == 'occt' and shape is not None:
             try:
@@ -139,6 +268,52 @@ class AssemblyViewer(QtWidgets.QWidget):
                 base_rgb = self._get_or_assign_base_rgb(name)
                 try:
                     self._ctx.SetColor(ais, Quantity_Color(base_rgb[0], base_rgb[1], base_rgb[2], Quantity_TOC_RGB), False)
+                except Exception:
+                    pass
+                # Ensure shaded mode and draw black edges (face boundaries)
+                try:
+                    # 1 == AIS_Shaded (avoid extra import of AIS_DisplayMode)
+                    self._ctx.SetDisplayMode(ais, 1, False)
+                except Exception:
+                    pass
+                try:
+                    from OCC.Core.Prs3d import Prs3d_Drawer, Prs3d_LineAspect  # type: ignore
+                    from OCC.Core.Aspect import Aspect_TOL_SOLID  # type: ignore
+                    from OCC.Core.Quantity import Quantity_NOC_BLACK  # type: ignore
+                    from OCC.Core.Graphic3d import Graphic3d_AspectFillArea3d  # type: ignore
+                    # Obtain (or create) the drawer and set face boundary draw + black boundary aspect
+                    try:
+                        drawer = ais.Attributes()
+                    except Exception:
+                        drawer = None
+                    if drawer is None or getattr(drawer, 'IsNull', lambda: False)():
+                        drawer = Prs3d_Drawer()
+                    drawer.SetFaceBoundaryDraw(True)
+                    black = Quantity_Color(Quantity_NOC_BLACK)
+                    line_aspect = Prs3d_LineAspect(black, Aspect_TOL_SOLID, 1.0)
+                    drawer.SetFaceBoundaryAspect(line_aspect)
+                    # Also set wire aspect to black for wireframe/edge views
+                    try:
+                        drawer.SetWireAspect(Prs3d_LineAspect(black, Aspect_TOL_SOLID, 1.0))
+                    except Exception:
+                        pass
+                    # Ensure facet (triangle) edges are NOT drawn; rely on face boundaries only
+                    try:
+                        sh_aspect = drawer.ShadingAspect()
+                        fill = sh_aspect.Aspect()
+                        try:
+                            fill.SetEdgeOff()
+                        except Exception:
+                            pass
+                        drawer.SetShadingAspect(sh_aspect)
+                    except Exception:
+                        pass
+                    ais.SetAttributes(drawer)
+                    # Apply attribute changes immediately
+                    try:
+                        self._ctx.Redisplay(ais, True)
+                    except Exception:
+                        pass
                 except Exception:
                     pass
                 self._name_to_item[name] = ais
@@ -167,6 +342,33 @@ class AssemblyViewer(QtWidgets.QWidget):
                 else:
                     base_rgb = self._name_to_base_color.get(n, (0.7, 0.7, 0.7))
                     item.setColor((base_rgb[0], base_rgb[1], base_rgb[2], 1.0))
+
+    def highlight_names(self, names: list[str]):
+        target = set(names or [])
+        if self._mode == 'occt':
+            for n, ais in self._name_to_item.items():
+                try:
+                    if n in target:
+                        self._ctx.SetColor(ais, Quantity_Color(self._highlight_rgb[0], self._highlight_rgb[1], self._highlight_rgb[2], Quantity_TOC_RGB), False)
+                    else:
+                        base_rgb = self._name_to_base_color.get(n, (0.7, 0.7, 0.7))
+                        self._ctx.SetColor(ais, Quantity_Color(base_rgb[0], base_rgb[1], base_rgb[2], Quantity_TOC_RGB), False)
+                except Exception:
+                    continue
+            try:
+                self._viewer._display.Repaint()
+            except Exception:
+                pass
+        elif self._mode == 'gl':
+            for n, item in self._name_to_item.items():
+                try:
+                    if n in target:
+                        item.setColor((self._highlight_rgb[0], self._highlight_rgb[1], self._highlight_rgb[2], 1.0))
+                    else:
+                        base_rgb = self._name_to_base_color.get(n, (0.7, 0.7, 0.7))
+                        item.setColor((base_rgb[0], base_rgb[1], base_rgb[2], 1.0))
+                except Exception:
+                    continue
 
     def clear_highlight(self):
         if self._mode == 'occt':
@@ -229,8 +431,12 @@ class AssemblyViewer(QtWidgets.QWidget):
         if name in self._name_to_item:
             self._view.removeItem(self._name_to_item[name])
         base_rgb = self._get_or_assign_base_rgb(name)
-        mesh = gl.GLMeshItem(vertexes=vertices, faces=faces, smooth=False, drawEdges=True, edgeColor=(0.2,0.2,0.2,1), color=(base_rgb[0], base_rgb[1], base_rgb[2], 1.0))
+        mesh = gl.GLMeshItem(vertexes=vertices, faces=faces, smooth=False, computeNormals=False, drawEdges=True, edgeColor=(0.0,0.0,0.0,1.0), color=(base_rgb[0], base_rgb[1], base_rgb[2], 1.0))
         mesh.setGLOptions('opaque')
+        try:
+            mesh.setShader(None)
+        except Exception:
+            pass
         self._name_to_item[name] = mesh
         self._view.addItem(mesh)
         self._accumulate_bounds(vertices)
@@ -244,6 +450,10 @@ class AssemblyViewer(QtWidgets.QWidget):
             self._update_overlay_position()
         except Exception:
             pass
+        try:
+            self._update_help_position()
+        except Exception:
+            pass
 
     def _update_overlay_position(self):
         if getattr(self, '_axes_overlay', None) is None:
@@ -252,6 +462,41 @@ class AssemblyViewer(QtWidgets.QWidget):
         w = self._axes_overlay.width()
         h = self._axes_overlay.height()
         self._axes_overlay.move(max(0, self.width() - w - margin), max(0, self.height() - h - margin))
+
+    def _update_help_position(self):
+        btn = getattr(self, '_help_btn', None)
+        if btn is None:
+            return
+        margin = 8
+        w = btn.sizeHint().width()
+        btn.move(max(0, self.width() - w - margin), margin)
+        btn.raise_()
+
+    def _show_shortcuts_help(self):
+        msg = [
+            "Keyboard shortcuts:",
+            "",
+            "General:",
+            "  • Double-click: Fit all (when available)",
+            "  • F: Fit all", 
+            "  • R: Reset view",
+            "",
+            "Projection:",
+            "  • W: Orthographic", 
+            "  • P: Perspective", 
+            "  • 5: Toggle Ortho/Perspective",
+            "",
+            "View orientations (OCCT):",
+            "  • 1: Front   • 3: Right   • 7: Top   • 9: Iso",
+            "  • 2: Bottom  • 4: Left    • 8: Top   • 6: Right   • 0: Back",
+            "",
+            "Lighting (OCCT):",
+            "  • L: Toggle default lighting on/off",
+        ]
+        try:
+            QtWidgets.QMessageBox.information(self, "3D Viewer Shortcuts", "\n".join(msg))
+        except Exception:
+            pass
 
     # ====== Keyboard shortcuts ======
     def keyPressEvent(self, event):
@@ -269,16 +514,25 @@ class AssemblyViewer(QtWidgets.QWidget):
                         disp.ResetView()
                     finally:
                         return
+                if k == QtCore.Qt.Key_L:
+                    try:
+                        self._toggle_default_lighting()
+                    finally:
+                        return
                 if k == QtCore.Qt.Key_W:
                     try:
                         disp.SetOrthographicProjection()
                         self._is_perspective = False
+                        # Enforce lights/headlight off after projection change
+                        self._enforce_unlit()
                     finally:
                         return
                 if k == QtCore.Qt.Key_P:
                     try:
                         disp.SetPerspectiveProjection()
                         self._is_perspective = True
+                        # Enforce lights/headlight off after projection change
+                        self._enforce_unlit()
                     finally:
                         return
                 # Numpad-style view controls
@@ -306,6 +560,8 @@ class AssemblyViewer(QtWidgets.QWidget):
                     if callable(fn):
                         try:
                             fn()
+                            # Re-apply unlit/no-light state after view orientation changes
+                            self._enforce_unlit()
                         finally:
                             return
                     # Fallback to direct projection if wrappers are missing
@@ -327,6 +583,8 @@ class AssemblyViewer(QtWidgets.QWidget):
                                 v.SetProj(V3d_Ypos)
                             elif k == QtCore.Qt.Key_9:
                                 v.SetProj(1.0, 1.0, 1.0)  # generic isometric
+                            # Re-apply unlit/no-light state after view orientation changes
+                            self._enforce_unlit()
                             return
                     except Exception:
                         pass
@@ -336,6 +594,23 @@ class AssemblyViewer(QtWidgets.QWidget):
             super().keyPressEvent(event)
         except Exception:
             pass
+
+    def eventFilter(self, obj, event):
+        try:
+            et = int(getattr(event, 'type', lambda: -1)())
+            if et == int(QtCore.QEvent.KeyPress):
+                # Forward to our keyPressEvent and consume
+                try:
+                    self.keyPressEvent(event)
+                    return True
+                except Exception:
+                    return False
+        except Exception:
+            pass
+        try:
+            return super().eventFilter(obj, event)
+        except Exception:
+            return False
 
     # ====== Color helpers ======
     def _hex_to_rgbf(self, hex_str: str):
